@@ -36,10 +36,12 @@ Comprehensive development environment with multiple language runtimes, tools, an
 - **pip** - Python package installer
 - **uv / uvx** - Fast Python package manager and tool runner
 - **cargo** - Rust package manager
+- **Nix 2.34.3** - Flakes and signed binary caches, using the base2 shared-store configuration
 
 ### AI CLI Tools
 
 - **C2M** - Colony 2's agent memory CLI
+- **C2J** - Colony 2's job and recipe CLI
 - **Claude Code** - Anthropic's official CLI
 - **Codex** - OpenAI's coding agent
 - **Gemini CLI** - Google's AI CLI
@@ -94,6 +96,18 @@ All tools from [shai-base](../shai-base) plus:
 - **dnsmasq** - DNS server
 
 ## Use Cases
+
+### Nix-backed c2j workloads
+
+Mega includes the pinned Nix runtime and configuration from
+`ghcr.io/colony-2/base2`. Nix runs as root without a daemon, and `/nix` starts
+empty so a shared store can be mounted there. Signed binary packages are
+supported; local builds are disabled. Profiles remain private to each container.
+
+Shared volumes must be initialized once before concurrent workers attach, and
+must not be garbage-collected while in use. See the
+[image README](https://github.com/colony-2/shai/tree/main/docker/mega#nix-and-c2j)
+for initialization commands, compatibility requirements, and acceptance tests.
 
 ### 1. Quick Start
 

@@ -73,6 +73,7 @@ jobs:
           fi
 
       - name: Build and push arch-specific image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: ./docker/mega
@@ -84,6 +85,12 @@ jobs:
             CACHE_BUST=${{ steps.cache_bust.outputs.value }}
           cache-from: type=gha,scope=${{ matrix.variant }}-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.variant }}-${{ matrix.arch }}
+
+      - name: Test Nix shared store and c2j recipe
+        run: |
+          python3 docker/mega/tests/test-nix.py \
+            --image ghcr.io/colony-2/shai-mega@${{ steps.build.outputs.digest }} \
+            --platform ${{ matrix.platform }}
 
   create-manifest:
     needs: build-arch

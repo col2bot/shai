@@ -5,6 +5,33 @@
 
 ## Build args for base image selection
 ARG BASE_IMAGE=debian:bookworm-slim
+# Pin the shared-store runtime, including its libraries and policy, as one unit.
+# Updating this requires running tests/test-nix.py against the previous image.
+ARG NIX_BASE_IMAGE=ghcr.io/colony-2/base2@sha256:9f9720da133a266d552239e7d4470834fea5500c5930e2a59a7e471c6b2aa22e
+
+FROM ${NIX_BASE_IMAGE} AS nix-runtime
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends patchelf
+COPY export-nix-runtime.py /tmp/export-nix-runtime.py
+RUN python3 /tmp/export-nix-runtime.py
+
+# Keep the same Nix on Debian and Ubuntu DinD without replacing system libraries.
+# This target also allows testing the Nix addition on an existing mega image.
+FROM ${BASE_IMAGE} AS nix-base
+COPY --from=nix-runtime /nix-export/ /
+COPY 10-nix.sh /etc/profile.d/10-nix.sh
+ENV NIX_REMOTE=local \
+    NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    PATH="${PATH}:/root/.local/state/nix/profile/bin"
+LABEL io.colony-2.base.nix-shared-store="1" \
+      io.colony-2.base.nix-store-compat="colony-nix-store-v1" \
+      io.colony-2.base.nix-store-initialization="provider"
+RUN mkdir -p /nix /root/.local/state/nix/profiles \
+    && ln -s profiles/profile /root/.local/state/nix/profile \
+    && ln -s /root/.local/state/nix/profile /root/.nix-profile \
+    && nix --version \
+    && test -z "$(ls -A /nix)"
 
 ## Build stage to determine latest versions
 FROM ${BASE_IMAGE} AS version-fetcher
@@ -66,7 +93,7 @@ RUN KUBECTL_MINOR=$(curl -fsSL https://api.github.com/repos/kubernetes/kubernete
 
 ## Main build stage
 ARG BASE_IMAGE=debian:bookworm-slim
-FROM ${BASE_IMAGE}
+FROM nix-base
 
 LABEL org.opencontainers.image.source="colony-2/shai-mega" \
       org.opencontainers.image.description="Slim Debian dev image with Go, Rust, Python, Node, C/C++, Java, jq, git, Bazel, and common AI, cloud, IaC, and Kubernetes CLIs" \

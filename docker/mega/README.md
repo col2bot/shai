@@ -17,6 +17,7 @@ A comprehensive Debian-based development environment with modern programming lan
 - **cargo** - Rust package manager
 - **pip** - Python package manager
 - **uv / uvx** - Fast Python package manager and tool runner
+- **Nix 2.34.3** - base2-compatible shared store, flakes, and signed binary caches
 - **bazel** - Bazel build system
 - **build-essential** - GCC, make, and core build tools
 
@@ -95,6 +96,69 @@ docker build \
 | `GO_VERSION` | Go version (e.g., `1.24.0`) | Latest from go.dev |
 | `RUST_VERSION` | Rust version (e.g., `1.83.0`) | Latest stable |
 | `NODE_VERSION` | Node.js version (e.g., `22.11.0`) | Latest from nodejs.org |
+| `NIX_BASE_IMAGE` | Certified base2 runtime source; changing requires compatibility tests | Pinned multi-architecture base2 digest in Dockerfile |
+
+## Nix and c2j
+
+Nix follows the [base2 shared-store contract](https://github.com/colony-2/base/blob/d6f7c04203443020f18448352eded6b473f250b1/docs/shared-nix-store.md).
+The image copies base2's exact Nix 2.34.3 runtime, cache configuration, pinned
+nixpkgs registry, build-denial hook, and `base-store-preflight` diagnostic. Its
+ELF loader and libraries are isolated under `/opt/nix-runtime/lib` because base2
+uses a newer Ubuntu than mega's Debian and Ubuntu DinD variants. Only Nix's ELF
+interpreter and library search path are changed; system libraries and child
+process environments are unaffected. Package versions and license notices are
+retained under `/opt/nix-runtime`.
+
+`/nix` ships empty. Nix runs directly as root with `NIX_REMOTE=local`, without a
+daemon or startup wrapper. Signed substitutes from `cache.nixos.org` and
+`colony2.cachix.org` are enabled; local/remote builds, fallback builds, automatic
+GC, and automatic store optimization are disabled. Profiles live privately in
+`/root/.local/state/nix/profiles`, outside the shared store. The profile's `bin`
+directory follows the image's normal tools on PATH, including in login shells.
+
+For one container, Nix initializes its ephemeral store on first use. For a shared
+store, the provider must initialize a local Docker volume once before attaching
+workers (root UID/GID 0), then validate each attachment:
+
+```bash
+docker volume create mega-nix
+docker run --rm --mount type=volume,src=mega-nix,dst=/nix,volume-nocopy \
+  --entrypoint /bin/sh shai-mega -ec \
+  'base-store-preflight; nix-store --init; base-store-preflight --require-initialized'
+docker run --rm --mount type=volume,src=mega-nix,dst=/nix,volume-nocopy \
+  --entrypoint nix shai-mega run nixpkgs#hello
+```
+
+Share the whole `/nix`, including its database. Keep profiles private and never
+run live GC, deletion, repair, or optimization while workers are attached. Retire
+whole idle volumes instead. Use the same architecture and compatibility group
+(`colony-nix-store-v1`) as base2. This does not enable Nix for Shai's non-root
+users; the shared-store/c2j worker contract uses root.
+
+### Runtime acceptance tests
+
+```bash
+python3 docker/mega/tests/test-nix.py --image shai-mega --platform linux/arm64
+```
+
+The tests use real signed packages and an actual c2j recipe: cold installation,
+offline reuse in both directions with base2, concurrent installations, private
+profiles, database integrity/NAR hashes, rejected unsigned packages and local
+builds, direct entrypoints, and attachment checks. CI runs them for both mega
+variants on amd64 and arm64 before publishing the combined `latest` manifests.
+
+To test only the Nix addition against an existing mega image:
+
+```bash
+docker build --target nix-base \
+  --build-arg BASE_IMAGE=ghcr.io/colony-2/shai-mega:latest \
+  -t shai-mega:nix-test docker/mega
+python3 docker/mega/tests/test-nix.py --image shai-mega:nix-test --platform linux/arm64
+```
+
+When updating `NIX_BASE_IMAGE`, run against the previous certified base2 digest
+using `--reference` as well; matching schema numbers alone do not establish
+shared-store compatibility.
 
 ## Usage Examples
 
@@ -144,6 +208,9 @@ python3 -m venv venv && source venv/bin/activate
 ## Layer Structure
 
 The Dockerfile is organized into distinct layers for optimal caching:
+
+The `nix-runtime` stage extracts the pinned base2 runtime. The `nix-base` stage
+adds it and its shared-store configuration before the following tool layers.
 
 1. **Base system packages** - apt packages and build tools
 2. **Go installation** - Go toolchain
